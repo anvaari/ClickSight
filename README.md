@@ -14,7 +14,7 @@ Clickhouse log aggregation using Ansible
     - If it's different in your case, open issue to provide option to get it as variable.
 - Also replace `{user}` with user which have sudo access on Clickhouse servers.
   - Sudo user needed in case of `{user}` hasn't read permission to read `/var/log/clickhouse-server.err.log`. If it has, you can remove all `become: true` from playbook and remove `-K` from command.
-- It's better to add your public key to authorized_key of Clickhouse servers so you don't need to enter password every time. [See how](https://linuxhandbook.com/add-ssh-public-key-to-server/) 
+- It's better to add your public key to authorized_key of Clickhouse servers so you don't need to enter password every time. [See how](https://linuxhandbook.com/add-ssh-public-key-to-server/)
 
 2.Install `Ansible`
 
