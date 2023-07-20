@@ -1,0 +1,126 @@
+- name: Clickhouse Error Analyzer
+  hosts: clickhouse
+  gather_facts: false
+  vars:
+    mode: "fatal"
+    lines_after: "20"
+    from_datetime: "$(date --date='2 hours ago' \"+%Y.%m.%d %H\")"
+    query_id: ""
+    error: "StorageKafka"
+  tasks:
+    - name: Fatal errors
+      ansible.builtin.shell: >
+        set -o pipefail && cat /var/log/clickhouse-server/clickhouse-server.err.log | grep "<Fatal>" -A{{ lines_after }}
+      args:
+        executable: /bin/bash
+      register: cl_fatal
+      changed_when: cl_fatal.rc != 0
+      failed_when: cl_fatal.rc != 0 and cl_fatal.rc != 1
+      when: mode == "fatal"
+      become: true
+    - name: Save output of fatal mode
+      ansible.builtin.copy:
+        dest: "./{{ inventory_hostname }}_clickhouse_fatal_errors.txt"
+        content: |
+          All fatal errors of Clickhouse on {{ inventory_hostname }}.
+          {{ cl_fatal.stdout }}
+        mode: "u=rw,g=rw,o=rw"
+      delegate_to: localhost
+      when: mode == "fatal"
+    - name: Timeline of Clickhouse errors for different error types
+      ansible.builtin.shell: >
+        set -o pipefail &&
+        export line_number=$(cat  /var/log/clickhouse-server/clickhouse-server.err.log|grep "^{{ from_datetime }}" -n | head -n1 | cut -d":" -f1) &&
+        awk "FNR>=$line_number" /var/log/clickhouse-server/clickhouse-server.err.log | grep "<Error>" |
+        cut -d":" -f1,2,3 |sed -E 's/^(.*) (.*):(.*):.*>(.*$)/\1T\2:\3 \4/'|sort |uniq -c
+      args:
+        executable: /bin/bash
+      register: cl_errors_t
+      changed_when: cl_errors_t.rc != 0
+      failed_when: cl_errors_t.rc != 0 and cl_errors_t.rc != 1
+      when: mode == "error_timeline"
+      become: true
+    - name: Save output error_timeline mode
+      ansible.builtin.copy:
+        dest: "./{{ inventory_hostname }}_clickhouse_error_timeline.txt"
+        content: |
+          TimeLine of Clickhouse error on {{ inventory_hostname }} in every minutes and for different errors, sorted by time of occurrence
+          Number of occurrence of error in the time | Time of occurrence | Error
+          {{ cl_errors_t.stdout }}
+        mode: "u=rw,g=rw,o=rw"
+      delegate_to: localhost
+      when: mode == "error_timeline"
+    - name: Timeline of error prone queries
+      ansible.builtin.shell: >
+        set -o pipefail &&
+        export line_number=$(cat  /var/log/clickhouse-server/clickhouse-server.err.log|grep "^{{ from_datetime }}" -n | head -n1 | cut -d":" -f1) &&
+        awk "FNR>=$line_number" /var/log/clickhouse-server/clickhouse-server.err.log |
+        grep -E '.*\{?[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\}? <Error>.*'|
+        cut -d":" -f1,2,3 | sed -E 's/^(.*) (.*):(.*):.*(\{?[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\}?) <Error> (.*$)/\1T\2:\3 {\4 \6/' |
+        sort | uniq -c
+      args:
+        executable: /bin/bash
+      register: cl_error_queries_t
+      changed_when: cl_error_queries_t.rc != 0
+      failed_when: cl_error_queries_t.rc != 0 and cl_error_queries_t.rc != 1
+      when: mode == "queries_error_timeline"
+      become: true
+    - name: Save output queries_error_timeline mode
+      ansible.builtin.copy:
+        dest: "./{{ inventory_hostname }}_clickhouse_queries_error_timeline.txt"
+        content: |
+          TimeLine of Error prone queries in Clickhouse on {{ inventory_hostname }} in every minutes and for different errors, sorted by time of occurrence
+          Number of occurrence of error in the time | Time of occurrence | Query ID | Error
+          {{ cl_error_queries_t.stdout }}
+        mode: "u=rw,g=rw,o=rw"
+      delegate_to: localhost
+      when: mode == "queries_error_timeline"
+    - name: Timeline of error associated with given query_id
+      ansible.builtin.shell: >
+        set -o pipefail &&
+        export line_number=$(cat  /var/log/clickhouse-server/clickhouse-server.err.log|grep "^{{ from_datetime }}" -n | head -n1 | cut -d":" -f1) &&
+        export query_id={{ query_id }} && awk "FNR>=$line_number" /var/log/clickhouse-server/clickhouse-server.err.log |
+        grep "{$query_id} <Error>"|
+        cut -d":" -f1,2,3 | sed -E 's/^(.*) (.*):(.*):.*(\{?[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\}?) <Error> (.*$)/\1T\2:\3 \6/' |
+        sort | uniq -c
+      args:
+        executable: /bin/bash
+      register: cl_error_query
+      changed_when: cl_error_query.rc != 0
+      failed_when: cl_error_query.rc != 0 and cl_error_query.rc != 1
+      when: mode == "given_query_id_error_timeline"
+      become: true
+    - name: Save output given_query_id_error_timeline mode
+      ansible.builtin.copy:
+        dest: "./{{ inventory_hostname }}_clickhouse_given_query_id_error_timeline.txt"
+        content: |
+          TimeLine of Error for query_id = {{ query_id }}  in Clickhouse on {{ inventory_hostname }} in each minutes from {{ from_datetime }}.
+          Result sorted by time of occurrence.
+          Number of occurrence of error in the time | Time of occurrence | Error
+          {{ cl_error_query.stdout }}
+        mode: "u=rw,g=rw,o=rw"
+      delegate_to: localhost
+      when: mode == "given_query_id_error_timeline"
+    - name: Timeline of given error with more details
+      ansible.builtin.shell: >
+        set -o pipefail &&
+        export line_number=$(cat  /var/log/clickhouse-server/clickhouse-server.err.log|grep "^{{ from_datetime }}" -n | head -n1 | cut -d":" -f1) &&
+        awk "FNR>=$line_number" /var/log/clickhouse-server/clickhouse-server.err.log | grep "<Error> {{ error }}" |
+        awk -F ", Stack trace" '{print $1}' | sed -E 's/^(.*) (.*):(.*):.*(\[.*$)/\1T\2:\3 \4/' | sort | uniq -c
+      args:
+        executable: /bin/bash
+      register: cl_error_t
+      changed_when: cl_error_t.rc != 0
+      failed_when: cl_error_t.rc != 0 and cl_error_t.rc != 1
+      when: mode == "given_error_timeline"
+      become: true
+    - name: Save output given_error_timeline mode
+      ansible.builtin.copy:
+        dest: "./{{ inventory_hostname }}_clickhouse_given_error_timeline.txt"
+        content: |
+          TimeLine of {{ error }} Error in Clickhouse on {{ inventory_hostname }} in every minutes with full detail.
+          Number of occurrence of error in the time | Time of occurrence | Error with details
+          {{ cl_error_t.stdout }}
+        mode: "u=rw,g=rw,o=rw"
+      delegate_to: localhost
+      when: mode == "given_error_timeline"
