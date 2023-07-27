@@ -4,6 +4,13 @@ Clickhouse log aggregation using Ansible
 
 ## Usage
 
+First Clone the project :)
+
+```bash
+git clone https://github.com/anvaari/ClickSight.git
+cd ClickSight
+```
+
 ### Perquisites
 
 1. Prepare Inventory file and Servers
